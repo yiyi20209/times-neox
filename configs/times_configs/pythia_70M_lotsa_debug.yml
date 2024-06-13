@@ -1,0 +1,152 @@
+{
+  
+  "save": "/lustre/orion/csc605/scratch/lyc041198/checkpoints/pythia70M-lotsa-checkpoint-debug",
+
+  "checkpoint_factor": 10,
+
+  "keep_last_n_checkpoints": 5,
+
+  "checkpoint-scale": "linear",
+
+  "gradient_accumulation_steps": 1,
+
+  "seq_length": 2048,
+
+  "pipe_parallel_size": 1,
+  "model_parallel_size": 1,
+  "log_dir": "logs/pythia_70M_multi_node_debug",
+
+  "times_args": {
+    "context_length": 2048,
+    "prediction_length": 1,
+    "scaling": "robust",
+    "shuffle_buffer_length": null,
+    "padding_value": 0,
+    "data_seed": 1337,
+
+    "inference": {
+      "num_test_batches": 1,
+      "file_name": "output.zarr",
+      "chunk_size": 128
+    },
+
+    "datasets":{
+      "train": [
+        "bdg-2_panther", "bdg-2_fox", "bdg-2_rat", "bdg-2_bear", "lcl", "smart", "ideal", "sceaux", "borealis",
+        "buildings_900k", "cmip6_1850", "cmip6_1855", "cmip6_1860", "cmip6_1865", "cmip6_1870", "cmip6_1875", "cmip6_1880",
+        "cmip6_1885", "cmip6_1890", "cmip6_1895", "cmip6_1900", "cmip6_1905", "cmip6_1910", "cmip6_1915", "cmip6_1920",
+        "cmip6_1925", "cmip6_1930", "cmip6_1935", "cmip6_1940", "cmip6_1945", "cmip6_1950", "cmip6_1955", "cmip6_1960",
+        "cmip6_1965", "cmip6_1970", "cmip6_1975", "cmip6_1980", "cmip6_1985", "cmip6_1990", "cmip6_1995", "cmip6_2000",
+        "cmip6_2005", "cmip6_2010", "era5_1989", "era5_1990", "era5_1991", "era5_1992", "era5_1993", "era5_1994", "era5_1995",
+        "era5_1996", "era5_1997", "era5_1998", "era5_1999", "era5_2000", "era5_2001", "era5_2002", "era5_2003", "era5_2004",
+        "era5_2006", "era5_2007", "era5_2008", "era5_2009", "era5_2010", "era5_2011", "era5_2012", "era5_2013", "era5_2014",
+        "era5_2015", "era5_2016", "era5_2017", "era5_2018", "azure_vm_traces_2017", "borg_cluster_data_2011",
+        "alibaba_cluster_trace_2018", "taxi_30min", "uber_tlc_daily", "uber_tlc_hourly", "wiki-rolling_nips", "m5",
+        "largest_2017", "largest_2018", "largest_2019", "largest_2020", "largest_2021", "PEMS03", "PEMS04", "PEMS07",
+        "PEMS08", "PEMS_BAY", "LOS_LOOP", "LOOP_SEATTLE", "SZ_TAXI", "BEIJING_SUBWAY_30MIN", "SHMETRO", "HZMETRO",
+        "Q-TRAFFIC", "london_smart_meters_with_missing", "wind_farms_with_missing", "wind_power", "solar_power",
+        "oikolab_weather", "elecdemand", "covid_mobility", "kaggle_web_traffic_weekly", "extended_web_traffic_with_missing",
+        "m1_yearly", "m1_quarterly", "m1_monthly", "monash_m3_yearly", "monash_m3_quarterly", "monash_m3_monthly", "monash_m3_other",
+        "m4_yearly", "m4_quarterly", "m4_monthly", "m4_weekly", "m4_daily", "m4_hourly", "nn5_daily_with_missing", "nn5_weekly",
+        "tourism_yearly", "tourism_quarterly", "tourism_monthly", "cif_2016_12", "cif_2016_6", "traffic_weekly", "traffic_hourly",
+        "australian_electricity_demand", "rideshare_with_missing", "saugeenday", "sunspot_with_missing", "temperature_rain_with_missing",
+        "vehicle_trips_with_missing", "weather", "car_parts_with_missing", "fred_md", "pedestrian_counts", "hospital", "covid_deaths",
+        "kdd_cup_2018_with_missing", "bitcoin_with_missing", "us_births", "covid19_energy", "gfc12_load", "gfc14_load", "gfc17_load",
+        "pdb", "spain", "hog", "bull", "cockatoo", "elf", "subseasonal", "subseasonal_precip", "kdd2022", "godaddy", "favorita_sales",
+        "favorita_transactions", "restaurant", "hierarchical_sales", "china_air_quality", "beijing_air_quality", "residential_load_power",
+        "residential_pv_power", "cdc_fluview_ilinet", "cdc_fluview_who_nrevss", "project_tycho", "M_DENSE"
+      ],
+      "validation": [
+        "elecdemand", "m1_monthly", "monash_m3_monthly", "monash_m3_other", "m4_monthly", 
+        "m4_weekly", "m4_daily", "m4_hourly", "nn5_daily_with_missing", "nn5_weekly", 
+        "tourism_quarterly", "tourism_monthly", "cif_2016_12", "cif_2016_6", "traffic_weekly", 
+        "traffic_hourly", "australian_electricity_demand", "rideshare_with_missing", "saugeenday", 
+        "sunspot_with_missing", "temperature_rain_with_missing", "vehicle_trips_with_missing", 
+        "weather", "car_parts_with_missing", "fred_md", "pedestrian_counts", "hospital", 
+        "covid_deaths", "kdd_cup_2018_with_missing", "bitcoin_with_missing", "us_births"
+      ],
+      "test":[
+
+      ],
+    },
+  },  
+
+
+  
+  "num_layers": 6,
+  "hidden_size": 512,
+  "num_attention_heads": 8,
+  "max_position_embeddings": 2048,
+  "pos_emb": "rotary",
+  "rotary_pct": 0.25,
+  "no_weight_tying": true,
+  "gpt_j_residual": true,
+  "output_layer_parallelism": "column",
+
+  "scaled_upper_triang_masked_softmax_fusion": true,
+  "bias_gelu_fusion": true,
+
+  "init_method": "small_init",
+  "output_layer_init_method": "wang_init",
+
+  "optimizer": {
+    "type": "Adam",
+    "params": {
+      "lr": 0.001,
+      "betas": [0.9, 0.95],
+      "eps": 1.0e-8
+    }
+  },
+  "min_lr": 0.0001,
+
+  "zero_optimization": {
+    "stage": 0,
+    "allgather_partitions": true,
+    "allgather_bucket_size": 500000000,
+    "overlap_comm": true,
+    "reduce_scatter": true,
+    "reduce_bucket_size": 500000000,
+    "contiguous_gradients": true,
+    "cpu_offload": false
+  },
+  "csv_monitor": {
+    "enabled": true,
+    "output_path": "logs",
+    "job_name": "pythia_70M_2_nodes_lotsa",
+  },
+
+   "precision": "bfloat16",
+
+  "fp32_allreduce": True,
+
+  "train_batch_size": 4,
+  "gradient_accumulation_steps": 1,
+  "data_impl": "mmap",
+  "num_workers": 1,
+
+  "checkpoint_activations": true,
+  "checkpoint_num_layers": 1,
+  "partition_activations": true,
+  "synchronize_each_layer": true,
+
+  "gradient_clipping": 1.0,
+  "weight_decay": 0.1,
+  "hidden_dropout": 0,
+  "attention_dropout": 0,
+
+  "train_iters": 100,
+  "lr_decay_iters": 10,
+  "distributed_backend": "nccl",
+  "lr_decay_style": "cosine",
+  "warmup": 0.0039,
+  "eval_interval": 10,
+  "eval_iters": 10,
+
+  "log_interval": 10,
+  "steps_per_print": 10,
+  "wall_clock_breakdown": true,
+
+  "tokenizer_type": "HFTokenizer",
+
+  "seed": 1337,
+}
