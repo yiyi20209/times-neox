@@ -1,6 +1,6 @@
 {
   
-  "save": "/lustre/orion/csc605/scratch/lyc041198/checkpoints/pythia70M-lotsa-checkpoint-debug",
+  "save": "{local_save_path}",
 
   "checkpoint_factor": 10,
 
