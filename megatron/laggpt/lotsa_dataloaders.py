@@ -1,13 +1,31 @@
-from gluonts.dataset.repository.datasets import get_dataset as get_gluonts_dataset
-import random
-import numpy as np
-from .lotsa_dataloaders import (
-    load_lotsa_arrow_dataset, load_gluonts_eval_dataset
-)
-from typing import List, Literal, Optional, Iterable
-
 from pathlib import Path
+from typing import Optional, Iterable, Literal
 
+from gluonts.transform import NumInstanceSampler
+from lotsa_dataset_names import DEFAULT, DEBUG, IN_DISTR_EVAL
+from gluonts.dataset.arrow import ArrowStreamFile
+from gluonts.dataset.common import Dataset, DatasetCollection
+from gluonts.dataset.split import TestData, split
+from gluonts.dataset.field_names import FieldName
+
+from gluonts.dataset.repository import get_dataset
+from gluonts.dataset.loader import as_stacked_batches
+from gluonts.itertools import Cyclic
+from gluonts.transform import (
+    Identity,
+    Chain,
+    ExpandDimArray,
+    AddObservedValuesIndicator,
+    SetField,
+    SampleTargetDim, 
+    TargetDimIndicator,
+    ExpectedNumInstanceSampler,
+    InstanceSplitter,
+    ValidationSplitSampler,
+)
+
+import json
+import torch
 from tempfile import TemporaryDirectory
 from zipfile import ZipFile
 from functools import partial
@@ -27,8 +45,8 @@ from gluonts.dataset.repository.datasets import get_dataset
 from pandas.tseries.frequencies import to_offset
 
 from gluonts.transform import SetField
-from .transforms import get_transformation
-from .lotsa_dataset_names import IN_DISTR_EVAL
+from .transforms import get_transformation_gluonts, SqueezeDimArray, HashField, MetadataInstanceSplitter
+
 
 import yaml
 import numpy as np
@@ -262,7 +280,6 @@ gluonts.dataset.repository.datasets.dataset_recipes.update({
     for k in additional_datasets.keys()
 })
 
-
 import random
 class CombinedDatasetIterator:
     def __init__(self, datasets, seed, weights):
@@ -284,7 +301,7 @@ class CombinedDatasetIterator:
                 raise StopIteration
         
         return data
-    
+
 class CombinedDataset:
     def __init__(self, datasets, seed=None, weights=None):
         self._seed = seed
@@ -342,11 +359,11 @@ class ShuffledTransformedDataset(TransformedDataset):
             yield self.transform_entry(self.base_dataset[idx])
 
 
-def load_train_dataset(path : Path, seed : int): 
+def load_train_dataset(path : Path): 
     datasets = []
     loaded = []
     weights = []
-    with open("/lustre/orion/csc605/world-shared/cross-modal-transfer/lotsa_capped_weights.yml", "r") as infile:
+    with open("lotsa/lotsa_capped_weights.yml", "r") as infile:
         lotsa_weights = yaml.safe_load(infile)
     
     for k, dataset_path in enumerate(path.glob("[!.]*")): # skip hidden directories
@@ -357,7 +374,27 @@ def load_train_dataset(path : Path, seed : int):
             weights.append(lotsa_weights[dataset_path.name])
 
     print(f"Loading {loaded} ...")
-    return CombinedDataset(datasets=datasets, seed=seed, weights=weights) # TODO: Add options for using uniform weights or DatasetCollection
+    return CombinedDataset(datasets=datasets, weights=weights) # TODO: Add options for using uniform weights or DatasetCollection
+
+
+from gluonts.transform import AsNumpyArray
+def get_transformation(is_multi_target: Optional[bool] = False, dataset_id: Optional[int] = None):
+    transformation = AsNumpyArray(FieldName.TARGET, expected_ndim=2 if is_multi_target else 1)
+    if not is_multi_target:
+        # Ensure that 'target' is 2D array for target sampling
+        transformation += ExpandDimArray(field=FieldName.TARGET, axis=0)
+    
+    # Replace NaNs with zeros
+    transformation += AddObservedValuesIndicator(
+        target_field=FieldName.TARGET,
+        output_field=FieldName.OBSERVED_VALUES,
+    )
+    transformation += TargetDimIndicator(field_name=FieldName.TARGET + '_dim', target_field=FieldName.TARGET)
+    transformation += SetField(output_field=FieldName.START, value=0)
+    transformation += HashField(field_name=FieldName.ITEM_ID)
+    transformation += SetField(output_field="dataset_id", value=dataset_id)
+
+    return transformation
 
 from gluonts.itertools import RandomYield
 def load_lotsa_train_dataset(dataset_name : str, path : Path, dataset_id: Optional[int] = None) -> Dataset:
@@ -374,7 +411,8 @@ def load_lotsa_train_dataset(dataset_name : str, path : Path, dataset_id: Option
         transformation += SetField(output_field="dataset_id", value=np.float32([dataset_id]))
 
     dataset_shards = [transformation.apply(ArrowStreamFile(path=arrow_path)) for arrow_path in dataset_path.glob("*.arrow")]
-    dataset = RandomYield(iterables=dataset_shards) # TODO: Add option to use DatasetCollection
+    #dataset = RandomYield(iterables=dataset_shards) # TODO: Add option to use DatasetCollection
+    dataset = DatasetCollection(datasets=dataset_shards)
     return dataset
 
 from datasets import load_from_disk
@@ -395,9 +433,9 @@ def load_lotsa_arrow_dataset(
     arrow_dataset = load_from_disk(dataset_path=str(dataset_path))
     return ShuffledTransformedDataset(arrow_dataset, transformation, is_train=True, seed=seed)
 
-def load_in_distr_eval_dataset(path: Path, seed: int, split: Literal["validation", "test"], regenerate: Optional[bool] = False) -> CombinedDataset:
+def load_in_distr_eval_dataset(path: Path, split: Literal["validation", "test"], regenerate: Optional[bool] = False) -> CombinedDataset:
     datasets = [load_gluonts_eval_dataset(dataset_name, path, split, regenerate=regenerate, dataset_id=k) for k, dataset_name in enumerate(IN_DISTR_EVAL)]
-    return CombinedDataset(datasets=datasets, seed=seed) # TODO: Add option to use RandomYield
+    return CombinedDataset(datasets=datasets) # TODO: Add option to use RandomYield
 
 def load_gluonts_eval_dataset(dataset_name: str, path: Path, eval_split: Literal["validation", "test"], regenerate: Optional[bool] = False, dataset_id: Optional[int] = None) -> TestData:
     dataset = get_dataset(
@@ -418,20 +456,238 @@ def load_gluonts_eval_dataset(dataset_name: str, path: Path, eval_split: Literal
     eval_data = transformation.apply(eval_data)
     return eval_data
 
-
-
-def get_combined_dataset(
-        dataset_names : List[str], 
-        path : Path, 
-        rank : int, 
-        seed : int, 
-        split: Optional[Literal["train", "val", "test"]] = "train",
-        weights: Optional[Iterable[float]] = None,
-    ) -> CombinedDataset:
-    if split == "train":
-        dataset = load_train_dataset(Path("/lustre/orion/csc605/world-shared/cross-modal-transfer/salesforce-lotsa/lotsa_data"), seed=seed)
+def create_training_data_loader(
+    data: Dataset,
+    past_length: int,
+    batch_size: int,
+    future_length: Optional[int] = 1,
+    shuffle_buffer_length: Optional[int] = None,
+    num_batches_per_epoch: Optional[int] = None,
+    dummy_value: Optional[float] = 0.0,
+    include_dataset_ids: Optional[bool] = True,
+    include_item_ids: Optional[bool] = True,
+) -> Iterable:
+    sample_target = SampleTargetDim(
+            field_name=FieldName.TARGET + '_dim',
+            target_field=FieldName.TARGET,
+            observed_values_field=FieldName.OBSERVED_VALUES,
+            num_samples=1,
+        )
+    squeeze_target = SqueezeDimArray(field=FieldName.TARGET, axis=-1)
+    # instance_sampler = ExpectedNumInstanceSampler(
+    #     num_instances=1.0, 
+    #     min_past=1, 
+    #     min_instances=1,
+    #     min_future=1
+    # )
+    instance_sampler = NumInstanceSampler(
+        N=1,
+        min_future=1
+    ) # TODO: Add option for ExpectedNumInstanceSampler
+    if include_dataset_ids:
+        splitter = MetadataInstanceSplitter(
+        target_field=FieldName.TARGET,
+        is_pad_field=FieldName.IS_PAD,
+        start_field=FieldName.START,
+        forecast_start_field=FieldName.FORECAST_START,
+        instance_sampler=instance_sampler,
+        past_length=past_length,
+        future_length=future_length,
+        time_series_fields=[
+            FieldName.OBSERVED_VALUES,
+        ],
+        dummy_value=dummy_value,
+        meta_fields=["dataset_id", FieldName.ITEM_ID],
+    )
     else:
-        dataset = load_in_distr_eval_dataset(Path("/lustre/orion/csc605/world-shared/cross-modal-transfer/gluonts"), seed=seed, split="validation")
+        splitter = InstanceSplitter(
+            target_field=FieldName.TARGET,
+            is_pad_field=FieldName.IS_PAD,
+            start_field=FieldName.START,
+            forecast_start_field=FieldName.FORECAST_START,
+            instance_sampler=instance_sampler,
+            past_length=past_length,
+            future_length=future_length,
+            time_series_fields=[
+                FieldName.OBSERVED_VALUES,
+            ],
+            dummy_value=dummy_value,
+        )
+    transformation = Chain(transformations=[splitter, sample_target, squeeze_target])
+    data = Cyclic(data).stream()
+    instances = transformation.apply(data, is_train=True)
+    field_names = ["past_target", "past_observed_values", "future_target", "future_observed_values"]
+    return as_stacked_batches(
+        instances,
+        batch_size=batch_size,
+        shuffle_buffer_length=shuffle_buffer_length,
+        field_names=(field_names + \
+            (["dataset_id"] if include_dataset_ids else []) + \
+            ([FieldName.ITEM_ID] if include_dataset_ids else [])
+        ),
+        output_type=torch.tensor,
+        num_batches_per_epoch=num_batches_per_epoch,
+    )
 
-    return dataset
+def create_validation_data_loader(
+    data: Dataset,
+    past_length: int,
+    batch_size: int,
+    future_length: Optional[int] = 1,
+    dummy_value: Optional[float] = 0.0,
+) -> Iterable:
+    sample_target = SampleTargetDim(
+            field_name=FieldName.TARGET + '_dim',
+            target_field=FieldName.TARGET,
+            observed_values_field=FieldName.OBSERVED_VALUES,
+            num_samples=1,
+        ) # TODO: weighted target sampling instead of uniform
+    squeeze_target = SqueezeDimArray(field=FieldName.TARGET, axis=-1)
+    instance_sampler = ValidationSplitSampler(min_future=1)
+    splitter = InstanceSplitter(
+            target_field=FieldName.TARGET,
+            is_pad_field=FieldName.IS_PAD,
+            start_field=FieldName.START,
+            forecast_start_field=FieldName.FORECAST_START,
+            instance_sampler=instance_sampler,
+            past_length=past_length,
+            future_length=future_length,
+            time_series_fields=[
+                FieldName.OBSERVED_VALUES,
+            ],
+            dummy_value=dummy_value,
+        )
+    transformation = Chain(transformations=[splitter, sample_target, squeeze_target])
+    data = Cyclic(data).stream()
+    instances = transformation.apply(data, is_train=True)
+    return as_stacked_batches(
+        instances,
+        batch_size=batch_size,
+        field_names=[
+            "past_target",
+            "past_observed_values",
+            "future_target",
+            "future_observed_values",
+        ],
+        output_type=torch.tensor,
+    )
 
+# def create_validation_data_loader(
+#     data: Dataset,
+#     past_length: int,
+#     batch_size: int,
+#     future_length: Optional[int] = 1,
+#     shuffle_buffer_length: Optional[int] = None,
+#     num_batches_per_epoch: Optional[int] = None,
+#     dummy_value: Optional[float] = 0.0,
+#     include_dataset_ids: Optional[bool] = True,
+#     include_item_ids: Optional[bool] = True,
+# ) -> Iterable:
+#     sample_target = SampleTargetDim(
+#             field_name=FieldName.TARGET + '_dim',
+#             target_field=FieldName.TARGET,
+#             observed_values_field=FieldName.OBSERVED_VALUES,
+#             num_samples=1,
+#         )
+#     squeeze_target = SqueezeDimArray(field=FieldName.TARGET, axis=-1)
+#     instance_sampler = ValidationSplitSampler(min_future=1)
+#     print(include_dataset_ids)
+#     if include_dataset_ids:
+#         splitter = MetadataInstanceSplitter(
+#             target_field=FieldName.TARGET,
+#             is_pad_field=FieldName.IS_PAD,
+#             start_field=FieldName.START,
+#             forecast_start_field=FieldName.FORECAST_START,
+#             instance_sampler=instance_sampler,
+#             past_length=past_length,
+#             future_length=future_length,
+#             time_series_fields=[
+#                 FieldName.OBSERVED_VALUES,
+#             ],
+#             dummy_value=dummy_value,
+#             meta_fields=["dataset_id", FieldName.ITEM_ID],
+#         )
+#     else:
+#         splitter = InstanceSplitter(
+#             target_field=FieldName.TARGET,
+#             is_pad_field=FieldName.IS_PAD,
+#             start_field=FieldName.START,
+#             forecast_start_field=FieldName.FORECAST_START,
+#             instance_sampler=instance_sampler,
+#             past_length=past_length,
+#             future_length=future_length,
+#             time_series_fields=[
+#                 FieldName.OBSERVED_VALUES,
+#             ],
+#             dummy_value=dummy_value,
+#         )
+#     transformation = Chain(transformations=[splitter, sample_target, squeeze_target])
+#     data = Cyclic(data).stream()
+#     instances = transformation.apply(data, is_train=True)
+#     field_names = ["past_target", "past_observed_values", "future_target", "future_observed_values"]
+#     return as_stacked_batches(
+#         instances,
+#         batch_size=batch_size,
+#         shuffle_buffer_length=shuffle_buffer_length,
+#         field_names=(field_names + \
+#             (["dataset_id"] if include_dataset_ids else []) + \
+#             ([FieldName.ITEM_ID] if include_dataset_ids else [])
+#         ),
+#         output_type=torch.tensor,
+#         num_batches_per_epoch=num_batches_per_epoch,
+#     )
+
+if __name__ == '__main__':
+    from argparse import ArgumentParser
+
+    parser = ArgumentParser()
+    parser.add_argument("--train_dir", type=str, required=True)
+    parser.add_argument("--validation_dir", type=str, required=True)
+    parser.add_argument("--test_dir", type=str, required=True)
+    parser.add_argument("-n", "--names", type=list, nargs='+')
+    parser.add_argument("--load_all", action="store_true", default=False)
+
+    args = parser.parse_args()
+
+    train_path = Path(args.train_dir)
+    if args.load_all:
+        dataset_names = DEFAULT
+    elif args.names is not None:
+        dataset_names = args.names
+    else:
+        dataset_names = DEBUG
+
+    train_datasets = []
+    loaded = []
+    for dataset_name in dataset_names:
+        ds = load_lotsa_train_dataset(dataset_name, train_path)
+        loaded.append(dataset_name)
+        train_datasets.append(ds)
+    
+    print(f"Loading the following datasets for training: {loaded} ...")
+    train_dataset = DatasetCollection(datasets=train_datasets)
+
+    validation_path = Path(args.validation_dir)
+    test_path = Path(args.test_dir)
+    validation_datasets = []
+    test_datasets = []
+    loaded = []
+    for dataset_name in IN_DISTR_EVAL:
+        val_ds = load_gluonts_eval_dataset(dataset_name, validation_path, eval_split='validation', regenerate=False)
+        test_ds = load_gluonts_eval_dataset(dataset_name, validation_path, eval_split='test', regenerate=False)
+        loaded.append(dataset_name)
+
+        validation_datasets.append(val_ds)
+        test_datasets.append(test_ds)
+    
+    print(f"Loading the following datasetsfor evaluation: {loaded} ...")
+    validation_dataset = DatasetCollection(datasets=validation_datasets)
+    test_dataset = DatasetCollection(datasets=test_datasets)
+
+    train_loader = create_training_data_loader(train_dataset, past_length=3140, batch_size=2, shuffle_buffer_length=10000)
+    validation_loader = create_validation_data_loader(validation_dataset, past_length=3140, batch_size=2)
+    test_loader = create_validation_data_loader(test_dataset, past_length=3140, batch_size=2)
+
+    sample_train_batches = [batch for _, batch in zip(range(10), train_loader)] # Should return no errors
+    sample_validation_batches = [batch for _, batch in zip(range(10), validation_loader)]
+    sample_test_batches = [batch for _, batch in zip(range(10), test_loader)]

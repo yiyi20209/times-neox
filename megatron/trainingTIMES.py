@@ -55,8 +55,8 @@ from megatron.utils import (
     get_total_params,
     CharCounter,
 )
-from megatron.model.gpt2_model import cross_entropy
-from eval_tasks import run_eval_harness
+#from megatron.model.gpt2_model import cross_entropy
+#from eval_tasks import run_eval_harness
 
 
 
@@ -506,7 +506,7 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
                 raise ValueError("Must be using deepspeed to run neox")
             timers("optimizer").stop()
         reduced_loss = {
-            "lm_loss": reduce_losses(losses).mean()
+            "nll_loss": reduce_losses(losses).mean()
         }  # reduces losses across machines for logging
 
     if neox_args.precision == "fp16" and model.optimizer.overflow:
@@ -522,7 +522,7 @@ def train_step_pipe(neox_args, timers, model, data_iterator):
 
     assert neox_args.deepspeed
     loss = model.train_batch(data_iter=data_iterator)
-    loss_dict = {"lm_loss": loss}
+    loss_dict = {"nll_loss": loss}
     # Don't break Megatron's timers because we changed code paths.
     for t in [
         "forward",
@@ -702,8 +702,8 @@ def evaluate(
                 deepspeed.checkpointing.reset()
 
     # reduces losses across processes for logging & run eval harness tasks
-    eval_results = {"lm_loss": reduce_losses(losses).mean().item()}
-    eval_results["lm_loss_ppl"] = math.exp(eval_results["lm_loss"])
+    eval_results = {"nll_loss": reduce_losses(losses).mean().item()}
+    eval_results["nll_loss_ppl"] = math.exp(eval_results["nll_loss"])
 
     # Move model back to the train mode.
     model.train()

@@ -36,6 +36,7 @@ ATTENTION_TYPE_CHOICES = [
     "gmlp",
     "amlp",
     "flash",
+    "mamba",
 ]
 
 
@@ -110,14 +111,39 @@ class NeoXArgsModel(NeoXArgsTemplate):
     Transformer hidden size.
     """
 
+    intermediate_size: int = None
+    """
+    Transformer intermediate size. Currently only used for "mlp_type": "llama".
+
+    If not passed, will be set to a reasonable default.
+    """
+
     num_attention_heads: int = None
     """
     Number of transformer attention heads.
+
+    If num_kv_heads is set, will control only number of query heads.
+    """
+
+    num_kv_heads: int = None
+    """
+    Number of transformer key/value attention heads.
+
+    If set to None or the same value as num_attention_heads, will perform multi-head attention (MHA).
+    If set to < num_attention_heads but > 1, will perform grouped-query attention (GQA) (https://arxiv.org/pdf/2305.13245.pdf)
+    If set to 1, will perform multi-query attention.
+
+    Must be < num_attention_heads and divide num_attention_heads evenly.
     """
 
     seq_length: int = None
     """
     Maximum sequence length to process.
+    """
+
+    sliding_window_width: int = None
+    """
+    Width of the attention sliding window. Only supported with Flash Attention 2.
     """
 
     max_position_embeddings: int = None
@@ -128,6 +154,16 @@ class NeoXArgsModel(NeoXArgsTemplate):
     norm: Literal["layernorm", "rmsnorm", "scalenorm"] = "layernorm"
     """
     Normalization layer to use. Choose from "layernorm", "rmsnorm", "scalenorm".
+    """
+
+    layernorm_fusion: bool = False
+    """
+    Use fused layer norm kernel (if `norm` is `layernorm`).
+    """
+
+    use_qk_layernorm: bool = False
+    """
+    Use QK Normalization
     """
 
     layernorm_epsilon: float = 1.0e-5
@@ -180,7 +216,7 @@ class NeoXArgsModel(NeoXArgsTemplate):
     The first item in the list specifies the attention type(s), and should be a list of strings. The second item
     specifies the number of times to repeat those attention types in the full list.
 
-    attention type choices:  [global, local, sparse_fixed, sparse_variable, bslongformer, bigbird]
+    attention type choices:  [global, local, sparse_fixed, sparse_variable, bslongformer, bigbird, "gmlp", "amlp", "flash", "mamba"]
 
     So a 12 layer network with only global attention could be specified like:
         [[[`global`], 12]]
@@ -260,6 +296,11 @@ class NeoXArgsModel(NeoXArgsTemplate):
     Enable bias and dropout fusion.
     """
 
+    rope_fusion: bool = False
+    """
+    Enable rotary embedding fusion.
+    """
+
     fp16_lm_cross_entropy: bool = False
     """
     Move the cross entropy unreduced loss calculation for lm head to fp16.
@@ -295,6 +336,15 @@ class NeoXArgsModel(NeoXArgsTemplate):
     Base for rotary positional embedding
     """
 
+    rotary_save_freqs_buffer: bool = False
+    """
+    Used to control whether the `inv_freqs` buffer in rotary embeddings
+    will be stored in checkpoints (persistent=True) or not.
+
+    Defaults to false, but is left configurable to maintain backward-compatibility
+    with GPT-NeoX checkpoints that were trained with this flag.
+    """
+
     init_method: Literal[
         "normal",
         "scaled_normal",
@@ -304,6 +354,7 @@ class NeoXArgsModel(NeoXArgsTemplate):
         "xavier_normal",
         "wang_init",
         "small_init",
+        "single_residual_scaled_normal",
     ] = "normal"
     """
     Init function used on all layers except ff residual outputs - choose from
@@ -319,6 +370,7 @@ class NeoXArgsModel(NeoXArgsTemplate):
         "xavier_normal",
         "wang_init",
         "small_init",
+        "single_residual_scaled_normal",
     ] = "scaled_normal"
     """
     Init function used for ff residual outputs - choose from
@@ -377,6 +429,37 @@ class NeoXArgsModel(NeoXArgsTemplate):
         'init_range': float = 0.5 # if no init string is provided, initialize the soft prompt with a uniform distribution between -init_range and init_rang
     """
 
+    mamba_selective_scan_fusion: bool = False
+    """
+    Enable fused kernels for Mamba selective scan.
+    """
+
+    mamba_causal_conv_fusion: bool = False
+    """
+    Enable fused kernels for Mamba causal Conv1d.
+    """
+
+    mamba_inner_func_fusion: bool = False
+    """
+    Enable fused inner operator for Mamba. (Supersedes conv. and selective scan fusion flags, requires each of those kernels to be installed.)
+    """
+
+    mamba_selective_fp32_params: bool = True
+    """
+    Keep selected parameters in fp32 for Mamba (A and D).
+    Requires https://github.com/EleutherAI/DeeperSpeed/pull/61 .
+    """
+
+    mamba_use_bias_in_conv: bool = True
+    """
+    If false, conv1d in mamba block will not have bias term
+    """
+
+    mamba_use_bias_in_linears: bool = False
+    """
+    Enable bias terms in mamba block up- and down- projections (in_proj and out_proj).
+    """
+
     # Output layer parallelism over the hidden dim is currently broken (https://github.com/EleutherAI/gpt-neox/issues/905)
     output_layer_parallelism: Literal["column"] = "column"
 
@@ -392,10 +475,17 @@ class NeoXArgsOptimizer(NeoXArgsTemplate):
     """
 
     optimizer_type: Literal[
-        "adam", "onebitadam", "cpu_adam", "cpu_torch_adam", "sm3", "madgrad_wd", "sgd"
+        "adam",
+        "onebitadam",
+        "cpu_adam",
+        "cpu_torch_adam",
+        "sm3",
+        "madgrad_wd",
+        "sgd",
+        "lion",
     ] = "adam"
     """
-    Type of optimizer to use. Choose from ['adam', 'onebitadam', 'cpu_adam', 'cpu_torch_adam', 'sm3', 'madgrad_wd', 'sgd']
+    Type of optimizer to use. Choose from ['adam', 'onebitadam', 'cpu_adam', 'cpu_torch_adam', 'sm3', 'madgrad_wd', 'sgd', 'lion']
     NOTE: sgd will use MuSGD from Mup. Mup must be enabled for this optimizer.
     """
 
@@ -554,6 +644,39 @@ class NeoXArgsLogging(NeoXArgsTemplate):
     gradient_noise_scale_cpu_offload: bool = False
     """
     Whether to offload the buffered gradients to cpu when measuring gradient noise scale.
+    """
+
+    memory_profiling: bool = False
+    """
+    Whether to take a memory snapshot of the model. Useful for debugging memory issues.
+    """
+
+    memory_profiling_path: str = None
+    """
+    Path to save memory snapshot to.
+    """
+
+    profile: bool = False
+    """
+    Enable nsys profiling. When using this option,
+    nsys options should be specified in commandline.
+    An example nsys commandline is
+    ```
+    nsys profile -s none -t nvtx,cuda -o <path/to/output_file>
+    --force-overwrite true
+    --capture-range=cudaProfilerApi
+    --capture-range-end=stop
+    ```
+    """
+
+    profile_step_start: int = 10
+    """
+    Step to start profiling at.
+    """
+
+    profile_step_stop: int = 12
+    """
+    Step to stop profiling at.
     """
 
 
@@ -796,6 +919,16 @@ class NeoXArgsTraining(NeoXArgsTemplate):
     save: str = None
     """
     Output directory to save checkpoints to.
+    """
+
+    s3_path: str = None
+    """
+    Path to s3 bucket for saving checkpoints.
+    """
+
+    s3_chunk_size: int = 104_857_600
+    """
+    The number of bytes in each file chunk when uploading to s3. Defaults to 100MiB.
     """
 
     config_files: dict = None

@@ -6,7 +6,7 @@ from gluonts.time_feature import get_lags_for_frequency
 
 
 from .gluontstorch.utils import take_last, repeat_along_dim, lagged_sequence_values, unsqueeze_expand
-from .gluontstorch.scaler import StdScaler, MeanScaler, NOPScaler
+from .gluontstorch.scaler import StdScaler, MeanScaler, NOPScaler, RobustScaler
 from .gluontstorch.studentt import StudentTOutput
 from .gluontstorch.loss import DistributionLoss, NegativeLogLikelihood
 
@@ -39,10 +39,13 @@ class TransformerEnvelope:
         elif scaling == "std":
             self.scaler = StdScaler(keepdim=True, dim=1)
             print_rank_0("> std scaling ...")
+        elif scaling == "robust":
+            self.scaler = RobustScaler(keepdim=True, dim=1)
+            print_rank_0("> robust scaling ...")
         else:
             self.scaler = NOPScaler(keepdim=True, dim=1)
 
-        self.lags_seq = sorted(
+        lags_seq = sorted(
             list(
                 set(
                     get_lags_for_frequency(freq_str="Q", num_default_lags=1)
@@ -55,6 +58,7 @@ class TransformerEnvelope:
                 )
             )
         )
+        self.lags_seq = [l - 1 for l in lags_seq]
         self.dist_head = distribution_head
         n_scaling_factors = 2
         self._feature_size= len(self.lags_seq) + n_scaling_factors

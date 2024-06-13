@@ -554,6 +554,11 @@ class ColumnParallelLinear(torch.nn.Module):
         # Matrix multiply.
 
         bias = self.bias if not self.skip_bias_add else None
+        ## TODO this is hardcoded bf16 downcast, might need adjust
+        if input_parallel.dtype is not self.weight.dtype:
+            input_parallel = input_parallel.to(self.weight.dtype)
+
+
         output_parallel = F.linear(input_parallel, self.weight, bias)
         if self.gather_output:
             # All-gather across the partitions.

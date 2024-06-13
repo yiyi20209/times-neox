@@ -30,6 +30,10 @@ from gluonts.transform import (
     InstanceSplitter,
 )
 
+from .lotsa_dataloaders import (
+    create_training_data_loader, create_validation_data_loader,
+)
+from pathlib import Path
 
 PREDICTION_INPUT_NAMES = ["past_target", "past_observed_values"]
 TRAINING_INPUT_NAMES = PREDICTION_INPUT_NAMES + [
@@ -153,17 +157,19 @@ def get_train_valid_test_dataloaders(neox_args, train_dataset, validation_datase
     num_batches_per_epoch = neox_args.train_iters * neox_args.gradient_accumulation_steps
     
 
-    training_data_loader = get_training_data_loader(
-        train_dataset, batch_size, num_batches_per_epoch, shuffle_buffer_length, 
-        past_length, prediction_length, padding_value)
+    training_data_loader = create_training_data_loader(
+        train_dataset, past_length, batch_size, prediction_length, 
+        shuffle_buffer_length, num_batches_per_epoch, padding_value
+    )
     
-    validation_data_loader = get_training_data_loader(
-        validation_dataset, batch_size, num_batches_per_epoch, shuffle_buffer_length, 
-        past_length, prediction_length, padding_value)
-    
+    validation_data_loader = create_validation_data_loader(
+        validation_dataset, past_length, batch_size, prediction_length, padding_value
+    )
+ 
     return training_data_loader, validation_data_loader, None
     
-    
+import yaml
+
 def combined_dataset_iterator(neox_args):
     """
     The central function to create a dataset iterator for training from the list of GluonTS datasets.
@@ -175,7 +181,7 @@ def combined_dataset_iterator(neox_args):
     train_datasets = datasets["train"]
     validation_datasets = datasets["validation"]
     
-    preload_datasets(train_datasets + validation_datasets)
+    #preload_datasets(train_datasets + validation_datasets)
 
     if src:
         rank = mpu.get_data_parallel_rank()
@@ -183,8 +189,11 @@ def combined_dataset_iterator(neox_args):
         data_seed = times_args["data_seed"] + iteration_index
         np.random.seed(data_seed)
         random.seed(data_seed)
-        train_datasets = get_combined_dataset(train_datasets, rank, data_seed)    
-        validation_datasets = get_combined_dataset(validation_datasets, rank, data_seed)
+        with open('/lustre/orion/csc605/world-shared/cross-modal-transfer/lotsa_capped_weights.yml', 'r') as weights_file:
+            lotsa_weights = yaml.safe_load(weights_file)
+        weights = [lotsa_weights[ds_name] for ds_name in train_datasets]
+        train_datasets = get_combined_dataset(train_datasets, Path("/lustre/orion/csc605/world-shared/cross-modal-transfer/salesforce-lotsa"), rank, data_seed, weights=weights)    
+        validation_datasets = get_combined_dataset(validation_datasets, Path("/lustre/orion/csc605/world-shared/cross-modal-transfer/gluonts"), rank, data_seed, split = 'val')
 
         dataloaders = partial(get_train_valid_test_dataloaders, train_dataset = train_datasets, validation_dataset = validation_datasets)
     else:
@@ -196,9 +205,6 @@ def combined_dataset_iterator(neox_args):
 
 
 def get_test_dataloader(neox_args, dataset):
-    """
-    Dataloader for test stage
-    """
     times_args = neox_args.times_args
 
     shuffle_buffer_length = times_args["shuffle_buffer_length"]
@@ -209,10 +215,10 @@ def get_test_dataloader(neox_args, dataset):
     
     batch_size = neox_args.train_micro_batch_size_per_gpu
     
-    test_dataloader = get_test_gluonts_dataloader(
-        dataset, batch_size, n_batches, shuffle_buffer_length, 
-        past_length, prediction_length, padding_value)
-    
+    test_dataloader = create_validation_data_loader(
+        dataset, past_length, batch_size, prediction_length, padding_value,
+    )
+
     return test_dataloader
     
 def preload_datasets(datasets):
@@ -236,7 +242,7 @@ def combined_test_dataset_iterator(neox_args):
 
     if src:
         rank = mpu.get_data_parallel_rank()
-        dataset = get_combined_dataset(test_datasets, rank, times_args["data_seed"], test = True)
+        dataset = get_combined_dataset(test_datasets, Path("/lustre/orion/csc605/world-shared/cross-modal-transfer/gluonts"), rank, times_args["data_seed"], test = True)
         dataloader = partial(get_test_dataloader, dataset = dataset)
     else:
         dataloader = None
